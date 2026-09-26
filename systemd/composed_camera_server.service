@@ -23,7 +23,9 @@
 #  OAK cameras:
 #       python -c "import depthai as dai; print(dai.Device.getAllAvailableDevices())"
 #  RealSense:
-#       rs-enumerate-devices --short
+#       source .venv_camera/bin/activate
+#       uv pip install -e "gear_sonic[camera,realsense]"
+#       python -c "import pyrealsense2 as rs; print([d.get_info(rs.camera_info.serial_number) for d in rs.context().query_devices()])"
 #  USB:
 #       ls /dev/video*    # use the index number, e.g. "0" for /dev/video0
 # ─────────────────────────────────────────────────────────────────
@@ -56,6 +58,16 @@ ExecStart=${REPO_DIR}/.venv_camera/bin/python -m gear_sonic.camera.composed_came
 #     --left-wrist-camera oak --left-wrist-device-id LEFT_MXID \
 #     --right-wrist-camera oak --right-wrist-device-id RIGHT_MXID \
 #     --port 5555
+
+# RealSense RGB example (install the SDK above before starting the service):
+# ExecStart=${REPO_DIR}/.venv_camera/bin/python -m gear_sonic.camera.composed_camera \
+#     --ego-view-camera realsense --ego-view-device-id EGO_SERIAL \
+#     --left-wrist-camera realsense --left-wrist-device-id LEFT_SERIAL \
+#     --right-wrist-camera realsense --right-wrist-device-id RIGHT_SERIAL \
+#     --port 5555
+# Omit wrist arguments for an ego-only setup. RealSense serials are required
+# when multiple RealSense devices are connected. Depth is off by default;
+# --realsense-enable-depth adds depth streaming, not depth dataset recording.
 
 Restart=on-failure
 RestartSec=5

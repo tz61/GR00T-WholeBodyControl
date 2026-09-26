@@ -4,8 +4,8 @@
 # on the robot computer.
 #
 # Installs gear_sonic[camera] which includes the ZMQ-based camera server
-# framework and the depthai SDK (OAK cameras). For other camera SDKs
-# (e.g. pyrealsense2), install them into the venv after setup.
+# framework and the depthai SDK (OAK cameras). Selecting RealSense during
+# service configuration also installs the pyrealsense2 SDK.
 #
 # Usage:  bash install_scripts/install_camera_server.sh   (run from repo root)
 
@@ -68,8 +68,9 @@ echo ""
 echo "  Activate the venv with:"
 echo "    source .venv_camera/bin/activate"
 echo ""
-echo "  For other camera SDKs, install into the venv:"
-echo "    pip install pyrealsense2     # Intel RealSense"
+echo "  RealSense SDK is installed when selected during service setup."
+echo "  For manual RealSense setup, install into the venv:"
+echo '    uv pip install -e "gear_sonic[camera,realsense]"'
 echo ""
 echo "  See docs/source/tutorials/data_collection.md for full setup."
 echo "══════════════════════════════════════════════════════════════"
@@ -128,27 +129,57 @@ for i, d in enumerate(devices):
 " 2>&1
 }
 
-while true; do
-    echo "  Detecting connected OAK cameras …"
-    OAK_DEVICES="$(detect_oak_cameras)" && OAK_FOUND=true || OAK_FOUND=false
+detect_realsense_cameras() {
+    "${REPO_ROOT}/.venv_camera/bin/python" -c "
+import pyrealsense2 as rs
+devices = rs.context().query_devices()
+if not devices:
+    exit(1)
+for device in devices:
+    print(f'    Serial: {device.get_info(rs.camera_info.serial_number)}  '
+          f'name: {device.get_info(rs.camera_info.name)}')
+" 2>&1
+}
 
-    if $OAK_FOUND && [ -n "$OAK_DEVICES" ]; then
-        echo "$OAK_DEVICES"
-        break
-    else
-        echo "  (no OAK devices detected)"
-        if [ -n "$OAK_DEVICES" ]; then
-            echo "  depthai output: $OAK_DEVICES"
-        fi
-        echo ""
-        read -rp "  Retry detection? [Y/n] (or 'n' to enter device IDs manually): " RETRY
-        if [[ "$RETRY" =~ ^[Nn]$ ]]; then
+OAK_DETECTED=false
+REALSENSE_DETECTED=false
+show_camera_devices() {
+    local camera_type="$1" detector camera_label devices found retry
+    case "$camera_type" in
+        oak|oak_mono)
+            if $OAK_DETECTED; then return; fi
+            OAK_DETECTED=true
+            detector=detect_oak_cameras
+            camera_label=OAK
+            ;;
+        realsense)
+            if $REALSENSE_DETECTED; then return; fi
+            echo '[INFO] Installing gear_sonic[camera,realsense] …'
+            uv pip install -e "gear_sonic[camera,realsense]"
+            REALSENSE_DETECTED=true
+            detector=detect_realsense_cameras
+            camera_label=RealSense
+            echo "  Use serial numbers for device IDs when multiple RealSense cameras are connected."
+            ;;
+        usb) return ;;
+        *) echo "[ERROR] Unknown camera type: $camera_type"; exit 1 ;;
+    esac
+
+    while true; do
+        echo "  Detecting connected $camera_label cameras …"
+        devices="$($detector)" && found=true || found=false
+        if $found && [ -n "$devices" ]; then
+            echo "$devices"
             break
         fi
-        echo ""
-    fi
-done
-echo ""
+        echo "  (no $camera_label devices detected)"
+        if [ -n "$devices" ]; then
+            echo "  SDK output: $devices"
+        fi
+        read -rp "  Retry detection? [Y/n] (or 'n' to enter device IDs manually): " retry
+        if [[ "$retry" =~ ^[Nn]$ ]]; then break; fi
+    done
+}
 
 # Build ExecStart args incrementally
 CAMERA_ARGS=""
@@ -156,7 +187,8 @@ CAMERA_ARGS=""
 # --- Ego-view camera (required) ---
 read -rp "  Ego-view camera type (oak, oak_mono, realsense, usb) [oak]: " EGO_TYPE
 EGO_TYPE="${EGO_TYPE:-oak}"
-read -rp "  Ego-view device ID (MxID or /dev/video index): " EGO_DEVICE_ID
+show_camera_devices "$EGO_TYPE"
+read -rp "  Ego-view device ID (OAK MxID, RealSense serial, or USB index): " EGO_DEVICE_ID
 CAMERA_ARGS="--ego-view-camera ${EGO_TYPE}"
 if [ -n "$EGO_DEVICE_ID" ]; then
     CAMERA_ARGS="${CAMERA_ARGS} --ego-view-device-id ${EGO_DEVICE_ID}"
@@ -166,9 +198,10 @@ fi
 echo ""
 read -rp "  Add a left-wrist camera? [y/N]: " ADD_LEFT
 if [[ "$ADD_LEFT" =~ ^[Yy]$ ]]; then
-    read -rp "  Left-wrist camera type [oak]: " LEFT_TYPE
+    read -rp "  Left-wrist camera type (oak, oak_mono, realsense, usb) [oak]: " LEFT_TYPE
     LEFT_TYPE="${LEFT_TYPE:-oak}"
-    read -rp "  Left-wrist device ID (MxID): " LEFT_DEVICE_ID
+    show_camera_devices "$LEFT_TYPE"
+    read -rp "  Left-wrist device ID (OAK MxID, RealSense serial, or USB index): " LEFT_DEVICE_ID
     CAMERA_ARGS="${CAMERA_ARGS} --left-wrist-camera ${LEFT_TYPE}"
     if [ -n "$LEFT_DEVICE_ID" ]; then
         CAMERA_ARGS="${CAMERA_ARGS} --left-wrist-device-id ${LEFT_DEVICE_ID}"
@@ -179,9 +212,10 @@ fi
 echo ""
 read -rp "  Add a right-wrist camera? [y/N]: " ADD_RIGHT
 if [[ "$ADD_RIGHT" =~ ^[Yy]$ ]]; then
-    read -rp "  Right-wrist camera type [oak]: " RIGHT_TYPE
+    read -rp "  Right-wrist camera type (oak, oak_mono, realsense, usb) [oak]: " RIGHT_TYPE
     RIGHT_TYPE="${RIGHT_TYPE:-oak}"
-    read -rp "  Right-wrist device ID (MxID): " RIGHT_DEVICE_ID
+    show_camera_devices "$RIGHT_TYPE"
+    read -rp "  Right-wrist device ID (OAK MxID, RealSense serial, or USB index): " RIGHT_DEVICE_ID
     CAMERA_ARGS="${CAMERA_ARGS} --right-wrist-camera ${RIGHT_TYPE}"
     if [ -n "$RIGHT_DEVICE_ID" ]; then
         CAMERA_ARGS="${CAMERA_ARGS} --right-wrist-device-id ${RIGHT_DEVICE_ID}"

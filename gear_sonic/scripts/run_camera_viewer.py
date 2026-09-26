@@ -3,6 +3,8 @@ ROS-free camera viewer with optional recording.
 
 Connects to a ZMQ camera server (MuJoCo sim SensorServer or real robot camera)
 and displays live camera feeds using OpenCV. Supports recording to MP4.
+Depth streams are displayed and recorded as colorized, frame-relative
+visualizations; MP4 recordings do not preserve raw depth values.
 
 Virtual environment setup (run from repo root):
     bash install_scripts/install_data_collection.sh
@@ -57,6 +59,28 @@ class CameraViewerConfig:
     """Max width per camera tile in the display window."""
 
 
+def image_to_bgr(image: np.ndarray) -> np.ndarray:
+    """Return a display/MP4 image without modifying the received frame.
+
+    uint16 depth is scaled from zero to the frame maximum and colorized;
+    missing depth (zero) stays black. This visualization is not metric depth.
+    """
+    if image.ndim == 2:
+        if image.dtype == np.uint16:
+            maximum = int(image.max())
+            scale = 255.0 / maximum if maximum else 0.0
+            gray = cv2.convertScaleAbs(image, alpha=scale)
+            color = cv2.applyColorMap(gray, cv2.COLORMAP_TURBO)
+            color[image == 0] = 0
+            return color
+        return cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+    if image.shape[2] == 3:
+        return cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+    if image.shape[2] == 4:
+        return cv2.cvtColor(image, cv2.COLOR_RGBA2BGR)
+    return cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+
+
 def main(config: CameraViewerConfig):
     client = ComposedCameraClientSensor(server_ip=config.camera_host, port=config.camera_port)
 
@@ -108,10 +132,7 @@ def main(config: CameraViewerConfig):
                 if img is None:
                     continue
 
-                if img.shape[2] == 3:
-                    img_bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-                else:
-                    img_bgr = img
+                img_bgr = image_to_bgr(img)
 
                 if is_recording and name in video_writers:
                     video_writers[name].write(img_bgr)

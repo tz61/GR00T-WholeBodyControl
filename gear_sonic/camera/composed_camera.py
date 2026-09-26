@@ -77,7 +77,10 @@ class ComposedCameraConfig:
     """Device ID for right wrist camera."""
 
     fps: int = 30
-    """Publish rate.  OAK cameras run at 30 FPS; lower values add latency."""
+    """Publish rate and RealSense capture rate. OAK cameras capture at 30 FPS."""
+
+    realsense_enable_depth: bool = False
+    """Stream RealSense depth as lossless PNG. The data exporter records RGB only."""
 
     run_as_server: bool = True
     """Run as ZMQ PUB server (set False for in-process usage)."""
@@ -102,6 +105,24 @@ class ComposedCameraConfig:
 
     def __post_init__(self):
         self.run_as_server = self.server
+        realsense_devices = [
+            device_id
+            for camera_type, device_id in (
+                (self.ego_view_camera, self.ego_view_device_id),
+                (self.head_camera, self.head_device_id),
+                (self.left_wrist_camera, self.left_wrist_device_id),
+                (self.right_wrist_camera, self.right_wrist_device_id),
+            )
+            if camera_type == "realsense"
+        ]
+        if len(realsense_devices) > 1:
+            if not all(realsense_devices):
+                raise ValueError(
+                    "Specify a device ID (serial number) for each RealSense camera "
+                    "when configuring multiple RealSense cameras."
+                )
+            if len(set(realsense_devices)) != len(realsense_devices):
+                raise ValueError("Each RealSense camera must have a different device ID (serial number).")
 
 
 class ComposedCameraSensor(Sensor, SensorServer):
@@ -373,10 +394,17 @@ class ComposedCameraSensor(Sensor, SensorServer):
             return OAKSensor(config=oak_config, mount_position=mount_position, device_id=device_id)
 
         elif camera_type == "realsense":
-            from gear_sonic.camera.drivers.realsense import RealSenseSensor
+            from gear_sonic.camera.drivers.realsense import RealSenseConfig, RealSenseSensor
 
             print(f"Initializing RealSense sensor for camera type: {camera_type}")
-            return RealSenseSensor(mount_position=mount_position)
+            return RealSenseSensor(
+                config=RealSenseConfig(
+                    fps=self.config.fps,
+                    enable_depth=self.config.realsense_enable_depth,
+                ),
+                mount_position=mount_position,
+                device_id=device_id,
+            )
 
         elif camera_type.endswith(".mp4"):
             from gear_sonic.camera.drivers.dummy import ReplayDummySensor

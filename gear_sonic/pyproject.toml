@@ -66,8 +66,7 @@ data_collection = [
     "datasets==3.6.0",
 ]
 # Camera server: runs on the robot to publish camera frames over ZMQ
-# Includes depthai (OAK cameras) by default. For other SDKs (pyrealsense2),
-# install them separately into the .venv_camera venv.
+# Includes depthai (OAK cameras) by default. Add the realsense extra for Intel cameras.
 # Usage: pip install -e "gear_sonic[camera]"
 camera = [
     "pyzmq",
@@ -77,6 +76,11 @@ camera = [
     "tyro",
     "depthai",
     "requests",
+]
+# Intel RealSense SDK, used alongside the camera server dependencies
+# Usage: pip install -e "gear_sonic[camera,realsense]"
+realsense = [
+    "pyrealsense2",
 ]
 # Inference: VLA inference client for running Isaac-GR00T policies
 # Usage: pip install -e "gear_sonic[inference]"

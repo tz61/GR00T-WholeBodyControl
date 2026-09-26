@@ -108,18 +108,25 @@ class ImageMessageSchema:
 
     Handles two encodings on the wire:
 
-    * **str** – legacy base64-encoded JPEG.
-    * **bytes** – raw JPEG from on-device MJPEG encoder (e.g. OAK).
+    * **str** – base64-encoded JPEG for color, lossless PNG for depth.
+    * **bytes** – raw JPEG from on-device MJPEG encoder (e.g. OAK), or PNG
+      for depth.
+
+    Image keys ending in ``_depth`` identify depth streams, which retain
+    their uint16 dtype and pixel values. All other keys keep the legacy
+    color encoding and channel order.
     """
 
     timestamps: dict[str, float]
-    images: dict[str, np.ndarray]
+    images: dict[str, np.ndarray | bytes | bytearray]
 
     def serialize(self) -> dict[str, Any]:
         serialized_msg: dict[str, Any] = {"timestamps": self.timestamps, "images": {}}
         for key, image in self.images.items():
             if isinstance(image, bytes | bytearray):
                 serialized_msg["images"][key] = image
+            elif key.endswith("_depth"):
+                serialized_msg["images"][key] = ImageUtils.encode_depth_image(image)
             else:
                 serialized_msg["images"][key] = ImageUtils.encode_image(image)
         return serialized_msg
@@ -130,10 +137,18 @@ class ImageMessageSchema:
         images = {}
         for key, value in data.get("images", {}).items():
             if isinstance(value, bytes | bytearray):
-                mat = cv2.imdecode(np.frombuffer(value, dtype=np.uint8), cv2.IMREAD_COLOR)
-                images[key] = mat[..., ::-1]  # BGR -> RGB
+                if key.endswith("_depth"):
+                    images[key] = cv2.imdecode(
+                        np.frombuffer(value, dtype=np.uint8), cv2.IMREAD_UNCHANGED
+                    )
+                else:
+                    mat = cv2.imdecode(np.frombuffer(value, dtype=np.uint8), cv2.IMREAD_COLOR)
+                    images[key] = mat[..., ::-1]  # BGR -> RGB
             elif isinstance(value, str):
-                images[key] = ImageUtils.decode_image(value)
+                if key.endswith("_depth"):
+                    images[key] = ImageUtils.decode_depth_image(value)
+                else:
+                    images[key] = ImageUtils.decode_image(value)
             elif isinstance(value, np.ndarray):
                 images[key] = value
             elif isinstance(value, dict) and b"nd" in value:

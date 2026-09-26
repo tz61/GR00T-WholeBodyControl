@@ -9,7 +9,7 @@ Everything runs **offboard on your workstation** except the **camera server**, w
 
 ```{admonition} Supported cameras
 :class: note
-The tested and supported camera setup uses **Luxonis OAK cameras** (OAK-D, OAK-1, etc.). This includes a head/ego-view OAK camera and optional OAK wrist cameras. Other camera drivers (RealSense, USB webcam) are included in the codebase but have not been tested recently.
+The tested camera setup uses **Luxonis OAK cameras** (OAK-D, OAK-1, etc.), with a head/ego-view camera and optional wrist cameras. **Intel RealSense RGB collection** is also available, including serial-number selection for multiple cameras. This initial RealSense integration has not been verified with physical hardware. The USB webcam driver has not been tested recently.
 
 A 3D-printable mount for the head/ego-view **OAK-D W** camera is available under [`hardware/camera_mount/`](https://github.com/NVlabs/GR00T-WholeBodyControl/blob/main/hardware/camera_mount/README.md) — see its README for print settings, the bill of materials, and how it mounts on the G1.
 ```
@@ -43,7 +43,7 @@ This environment is separate from `.venv_teleop` and `.venv_sim` — the data ex
 
 The camera server is the **only component that runs on the robot computer** (e.g., Jetson Orin). Everything else — the C++ deployment, PICO teleop streamer, data exporter, and camera viewer — runs on your workstation.
 
-The camera server captures frames from the OAK cameras physically connected to the robot and publishes them over ZMQ to the workstation.
+The camera server captures frames from cameras physically connected to the robot and publishes them over ZMQ to the workstation.
 
 ### Step 1: Clone the repo on the robot
 
@@ -57,7 +57,7 @@ cd GR00T-WholeBodyControl
 ### Step 2: Run the install script
 
 The install script handles everything: creates the virtual environment, installs all
-dependencies (including the DepthAI SDK for OAK cameras), detects connected cameras,
+dependencies (including the DepthAI SDK for OAK cameras), detects selected camera types,
 and optionally installs a systemd service so the camera server starts automatically
 on boot.
 
@@ -68,19 +68,15 @@ bash install_scripts/install_camera_server.sh
 The script will:
 
 1. Create `.venv_camera` with `gear_sonic[camera]` (DepthAI, ZMQ, msgpack, OpenCV, tyro).
-2. Detect connected OAK cameras and list their MxIDs.
-3. Prompt you for each camera position (ego view, and optionally left/right wrist) and its device ID.
-4. Ask whether to install the camera server as a **systemd service** (recommended). If you answer **y**, it generates the unit file, installs, enables, and starts the service automatically.
+2. Ask whether to install the camera server as a **systemd service** (recommended).
+3. If you answer **y**, prompt for each camera position (ego view, and optionally left/right wrist), detect the selected camera type, and ask for its device ID. OAK uses an MxID; RealSense uses a serial number. Selecting RealSense installs `gear_sonic[camera,realsense]` before detection and service startup. A RealSense-only configuration skips OAK detection.
+4. Generate the unit file, install, enable, and start the service after you confirm the configuration.
 
 After the script finishes, verify the service is running:
 
 ```sh
 sudo systemctl status composed_camera_server.service
 journalctl -u composed_camera_server.service -f
-```
-
-```{note}
-Other camera drivers (RealSense, USB webcam) are included in the codebase but have not been tested recently for data collection. If you need RealSense, install `pyrealsense2` into the venv after setup. See the driver files in `gear_sonic/camera/drivers/` for details.
 ```
 
 ### Manual setup (alternative)
@@ -123,7 +119,47 @@ python -m gear_sonic.camera.composed_camera \
 
 Run `python -m gear_sonic.camera.composed_camera --help` for all options including `--fps`, `--use-mjpeg`, and `--mjpeg-quality`.
 
-**Manual systemd setup:**
+### RealSense RGB setup
+
+For manual setup, create `.venv_camera` with the install script above (you can skip systemd installation), then install the RealSense SDK:
+
+```sh
+source .venv_camera/bin/activate
+uv pip install -e "gear_sonic[camera,realsense]"
+
+# List serial numbers using the Python SDK; no separate CLI utility is required.
+python - <<'PY'
+import pyrealsense2 as rs
+for device in rs.context().query_devices():
+    print(device.get_info(rs.camera_info.serial_number),
+          device.get_info(rs.camera_info.name))
+PY
+```
+
+Start a single ego-view camera:
+
+```sh
+python -m gear_sonic.camera.composed_camera \
+    --ego-view-camera realsense \
+    --ego-view-device-id YOUR_REALSENSE_SERIAL \
+    --port 5555
+```
+
+The device ID can be omitted only when exactly one RealSense camera is connected. With multiple cameras, specify a different serial for each position to keep the mapping stable:
+
+```sh
+python -m gear_sonic.camera.composed_camera \
+    --ego-view-camera realsense --ego-view-device-id EGO_SERIAL \
+    --left-wrist-camera realsense --left-wrist-device-id LEFT_SERIAL \
+    --right-wrist-camera realsense --right-wrist-device-id RIGHT_SERIAL \
+    --port 5555
+```
+
+RealSense captures RGB at **640×480 and 30 FPS** by default, matching the exporter's image dimensions. Use `--fps` to select another rate supported by your camera. OAK and RealSense cameras can be mixed by choosing the type and device ID for each position. Workstation connection settings stay the same; add `--record-wrist-cameras` to the data collection launcher or exporter to record wrist RGB streams.
+
+Depth is disabled by default. Add `--realsense-enable-depth` to publish depth alongside RGB when your camera supports it; both the server and workstation client must use the updated code. Depth travels as lossless 16-bit PNG in native device units, without conversion to meters or alignment to RGB. The viewer displays and records a visualization. **LeRobot datasets still record only RGB**, so enabling depth does not create a depth dataset. Metric depth recording requires additional dataset integration.
+
+### Manual systemd setup
 
 ```sh
 # 1. Edit the service file to match your camera setup
@@ -172,7 +208,7 @@ The camera server publishes a single msgpack-encoded payload per frame cycle con
 }
 ```
 
-Images are JPEG-compressed (quality 80) and either base64-encoded strings or raw JPEG bytes (when MJPEG on-device encoding is enabled). The data exporter's `ComposedCameraClientSensor` handles both formats automatically.
+RGB images are JPEG-compressed (quality 80) and either base64-encoded strings or raw JPEG bytes (when MJPEG on-device encoding is enabled). Optional RealSense depth streams use lossless 16-bit PNG. The data exporter's `ComposedCameraClientSensor` decodes these images automatically, but the dataset schema records only RGB streams.
 
 ---
 
@@ -185,7 +221,7 @@ The data exporter receives data from three ZMQ sources. The C++ deployment, PICO
 ┌──────────────────────┐  ┌──────────────────────┐  ┌───────────────┐
 │  C++ deploy          │  │  pico_manager         │  │  Camera       │
 │  (zmq_output_handler)│  │  _thread_server.py    │  │  server       │
-│                      │  │                       │  │  (OAK cameras)│
+│                      │  │                       │  │  (RGB camera) │
 │  port 5557           │  │  port 5556            │  │  port 5555    │
 │  topics: g1_debug,   │  │  topic: pose          │  │  (JPEG/ZMQ)   │
 │          robot_config│  │  (SMPL body params)   │  │               │
